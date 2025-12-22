@@ -1,0 +1,71 @@
+name: PSX Market Scraper (Production)
+
+on:
+  schedule:
+    # Every 5 minutes, Monday–Friday (UTC window wide rakha gaya)
+    - cron: "*/5 4-11 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Dependency cache (performance + production practice)
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ---------------- TIME WINDOW CONTROL ----------------
+      - name: Market time guard (PKT aware)
+        run: |
+          DAY=$(date -u +"%u")      # 1=Mon ... 5=Fri
+          TIME=$(date -u +"%H%M")   # UTC time
+
+          echo "UTC Day: $DAY | UTC Time: $TIME"
+
+          # ---- Monday to Thursday (9:30–15:30 PKT => 04:30–10:30 UTC)
+          if [ "$DAY" -ge 1 ] && [ "$DAY" -le 4 ]; then
+            if [ "$TIME" -lt "0430" ] || [ "$TIME" -gt "1030" ]; then
+              echo "Outside Mon–Thu market hours. Exiting."
+              exit 0
+            fi
+          fi
+
+          # ---- Friday (example: only TWO runs)
+          # Example assumption:
+          # Run only at 09:30 PKT (0430 UTC) and 14:30 PKT (0930 UTC)
+          if [ "$DAY" -eq 5 ]; then
+            if [ "$TIME" != "0430" ] && [ "$TIME" != "0930" ]; then
+              echo "Friday: not scheduled run time. Exiting."
+              exit 0
+            fi
+          fi
+
+          echo "Market window valid. Continuing."
+
+      # ---------------- RUN SCRIPT ----------------
+      - name: Run PSX scraper
+        run: |
+          python main.py
