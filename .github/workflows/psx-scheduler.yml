@@ -68,4 +68,4 @@ jobs:
       # ---------------- RUN SCRIPT ----------------
       - name: Run PSX scraper
         run: |
-          python main.py
+          python deepsupabasecode.py
