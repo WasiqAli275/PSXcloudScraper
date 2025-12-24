@@ -2,9 +2,13 @@ name: PSX Market Scraper (Production)
 
 on:
   schedule:
-    # Every 5 minutes, Monday–Friday (UTC window wide rakha gaya)
+    # Trigger frequently; actual control happens inside job
     - cron: "*/5 4-11 * * 1-5"
   workflow_dispatch:
+
+concurrency:
+  group: psx-scraper
+  cancel-in-progress: true
 
 jobs:
   run-scraper:
@@ -23,7 +27,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Dependency cache (performance + production practice)
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -37,35 +40,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ---------------- TIME WINDOW CONTROL ----------------
+      # -------- STRICT MARKET TIME GUARD --------
       - name: Market time guard (PKT aware)
         run: |
-          DAY=$(date -u +"%u")      # 1=Mon ... 5=Fri
-          TIME=$(date -u +"%H%M")   # UTC time
+          DAY=$(date -u +"%u")      # 1=Mon ... 7=Sun
+          HOUR=$(date -u +"%H")
+          MIN=$(date -u +"%M")
+          TIME=$((10#$HOUR * 60 + 10#$MIN))
 
-          echo "UTC Day: $DAY | UTC Time: $TIME"
+          echo "UTC Day=$DAY | Time=${HOUR}:${MIN}"
 
-          # ---- Monday to Thursday (9:30–15:30 PKT => 04:30–10:30 UTC)
+          # Mon–Thu: 04:30–10:30 UTC
           if [ "$DAY" -ge 1 ] && [ "$DAY" -le 4 ]; then
-            if [ "$TIME" -lt "0430" ] || [ "$TIME" -gt "1030" ]; then
-              echo "Outside Mon–Thu market hours. Exiting."
+            START=$((4 * 60 + 30))
+            END=$((10 * 60 + 30))
+
+            if [ "$TIME" -lt "$START" ] || [ "$TIME" -gt "$END" ]; then
+              echo "Outside Mon–Thu market hours. Exit."
               exit 0
             fi
           fi
 
-          # ---- Friday (example: only TWO runs)
-          # Example assumption:
-          # Run only at 09:30 PKT (0430 UTC) and 14:30 PKT (0930 UTC)
+          # Friday: allow only two windows (±2 min tolerance)
           if [ "$DAY" -eq 5 ]; then
-            if [ "$TIME" != "0430" ] && [ "$TIME" != "0930" ]; then
-              echo "Friday: not scheduled run time. Exiting."
+            T1=$((4 * 60 + 30))
+            T2=$((9 * 60 + 30))
+
+            DIFF1=$((TIME > T1 ? TIME - T1 : T1 - TIME))
+            DIFF2=$((TIME > T2 ? TIME - T2 : T2 - TIME))
+
+            if [ "$DIFF1" -gt 2 ] && [ "$DIFF2" -gt 2 ]; then
+              echo "Friday: not allowed run window. Exit."
               exit 0
             fi
           fi
 
-          echo "Market window valid. Continuing."
+          echo "Market window valid."
 
-      # ---------------- RUN SCRIPT ----------------
+      # -------- RUN SCRAPER --------
       - name: Run PSX scraper
         run: |
           python deepsupabasecode.py
